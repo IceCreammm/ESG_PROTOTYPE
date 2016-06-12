@@ -1,62 +1,54 @@
 ### functions collect equity data and process them for further technical analysis
 ############## these functions assume the GENERIC functions "funDevelop.R" are already beed sourced
-library(jsonlite)
-library(RCurl)
-library(TTR)
+library(pdfetch)
+library(xts)
 #####################BEGIN: functions to source data################################################################
-GetData.PrepEquityId.126API <- function(idStock){
-  Check.StopIf(!(is.vector(idStock)&is.character(idStock)),"Must be string vector")
-  Check.StopIf((!is.character(idStock))&sum(nchar(idStock)!=6)>0,"Must be character of 6 elements!")
-  
-  tmp <- as.numeric(idStock)
-  if(sum(is.na(tmp))>0){
-    stop(paste("Some idStock is not valid: ",paste0(idStock[is.na(tmp)],collapse=",")))
-  }
-  ### covert normal 6-digit-id to website 7-digit-id
-  # add 0 at 1st place means: shanghai exchange
-  # add 1 at 1st place means: sz exchange
-  idOut <- idStock
-  idOut[tmp >= 500000] <- paste0("0",idStock[tmp >= 500000])
-  idOut[tmp < 500000] <- paste0("1",idStock[tmp < 500000])
-  return(idOut)
-}
-
-GetData.EquityIntraDay.126API <- function(idEquity){
-  ### Prepare the input standard 6-digit stock id to 126API format  
-  idStock <- GetData.PrepEquityId.126API(idEquity)  
-  ### treatment for single stock inqury or multi stocks
-  if(length(idStock)==1) {
-    str.url <- paste0("http://api.money.126.net/data/feed/",idStock,",money.api")
-  } else{
-    str.url <- paste0("http://api.money.126.net/data/feed/",paste0(idStock,collapse=","),",money.api")
-  }
-  raw <- readLines(str.url, warn = "F",encoding="UTF-8")
-  ########################### the following string positions are tylored for 126API
-  json_data <- fromJSON(substr(substr(raw,1,nchar(raw)-2),22,nchar(raw)-2))
-  if(length(json_data)==0){
-    stop("None of the proved idStock can be found in api.money.126.net!")
-  }
-  namOut <- names(json_data)
-  if (!identical(setdiff(idStock,namOut),character(0))){
-    print(paste0("The provided idStock: ",paste0(substr(setdiff(idStock,namOut),2,7),collapse=",")," cannot be found in api.money.126.net"))
-  }
-  ########## convert list to data frame ##############
-  ## select common data fields overtime
-  dfOut <- as.data.frame(json_data[[1]],stringsAsFactors=FALSE)#[match(namField,names(json_data[[1]]))]
-  if (length(namOut)>1){
-    for (idx in 2:length(namOut)){
-      tmp <- as.data.frame(json_data[[idx]],stringsAsFactors=FALSE)
-      namField <- intersect(names(dfOut),names(json_data[[idx]]))
-      dfOut <- rbind(dfOut[,match(namField,names(dfOut))],tmp[,match(namField,names(tmp))])
+GetData.Pdfetch <- function(dictData){
+  Check.ExistVarInDF(dictData, c("nameR", "dataSource", "dataId", "type"))
+  Check.StopIf(length(setdiff(dictData$dataSource, c("ECB", "FRED", "EUROSTAT_DSD", "INSEE", "YAHOO")))!=0, 
+               "data source must be one of 'c(ECB, FRED, EUROSTAT_DSD, INSEE, YAHOO)'")
+  Check.StopIf(Size(dictData)[1]!=1, "Must be a single row of data frame!")
+  eval(parse(text=paste0(
+    "tmp <- tryCatch(pdfetch_", dictData$dataSource, "('", dictData$dataId, "'), error = function(e) {}, warning = function(w) {})"
+    )
+  ))
+  Check.StopIf(class(tmp)[1]=="NULL", paste0(dictData$dataId, "cannot be found in the source of ", dictData$dataSource))
+  Check.StopIf(Size(tmp)[2]>1, paste0("Expect output should be a vector"))
+  names(tmp) <- gsub(" ", "", dictData$nameR)
+  Check.StopIf(sum(sort(index(tmp))-index(tmp)!=0)>0, "Expect dates are sorted by the function!")
+  ##### expand data if type is price, rate or index
+  tmpType <- dictData$type
+  if (toupperNoSpace(dictData$type)%in%c("INDEX", "PRICE")){
+    namNew <- gsub("index", "rate", gsub("price", "rate", gsub(" ", "", dictData$nameR), ignore.case=T))
+    eval(parse(text=paste0(
+      "tmp$", namNew, " <- c(NA, as.numeric(tail(tmp[, 1], dim(tmp)[1]-1))/as.numeric(head(tmp[, 1], dim(tmp)[1]-1))-1)"
+      )
+    ))
+    tmpType <- c(tmpType, "rate")
+  } else if (toupperNoSpace(dictData$type)=="RATE"){
+    tmpVal <- as.numeric(tmp[, 1])
+    if (sum(is.na(tmpVal))>0){
+      warning(paste0("There are ", sum(sum(is.na(tmpVal))), " NA in ", names(tmp[, 1])), ", which are replace by 0.")
+      tmpVal[is.na(tmpVal)] <- 0
     }
+    tmpVal <- 100 * cumprod(1+ tmpVal)
+    eval(parse(text=paste0(
+      "tmp$", gsub("rate", "index", gsub(" ", "", dictData$nameR), ignore.case=T), " <- tmpVal"
+      )
+    ))
+    tmpType <- c(tmpType, "index")
+  } else {
+    warning(paste0(dictData$type, " is not defined (i.e, either price, index or rate). No additional var generated!"))
   }
-  namMust <- c("time","symbol","price","bid5","bid4","bid3","bid2","bid1","ask1","ask2","ask3","ask4","ask5",
-               "bidvol5","bidvol4","bidvol3","bidvol2","bidvol1","askvol5","askvol4","askvol3","askvol2","askvol1",
-               "yestclose","open","high","low","volume","turnover","percent")
-  dfOut <- dfOut[,match(namMust,names(dfOut))]
-  names(dfOut) <- c("time","idEquity","price","sel5","sel4","sel3","sel2","sel1","buy1","buy2","buy3","buy4","buy5",
-                    "volSel5","volSel4","volSel3","volSel2","volSel1","volBuy5","volBuy4","volBuy3","volBuy2","volBuy1",
-                    "closePreviDay","open","high","low","volume","turnover","percent")
-  return(dfOut)
+  ## prepare meta data
+  dictData$dateBegin <- min(index(tmp))
+  dictData$dateEnd <- max(index(tmp))
+  eval(parse(text=paste0(
+      "desc <- data.frame(cbind(", paste(rep("t(dictData)", Size(tmp)[2]), collapse=",") , ")[-1, ], stringsAsFactors=F)"
+    )
+  ))
+  names(desc) <- names(tmp)
+  row.names(desc) <- row.names(t(dictData))[-1]
+  return(list(dfData=tmp, dataInfo=desc))
 }
 ##############################################################################################END: FUNCTIONS TO SOURCE DATA##############
