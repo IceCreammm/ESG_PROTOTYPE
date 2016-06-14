@@ -1,0 +1,162 @@
+---
+title: "ESG Mock"
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: rows
+    # vertical_layout: fill
+runtime: shiny
+---
+
+```{r setup, include=FALSE}
+rm(list = ls())
+### load prepare the data or source them from data dictioanry
+######load("usEcoData2Test.Rdata")
+######source("CODE/0_collect_prepare_data.R")
+source("CODE/0_collect_prepare_CSV.R")
+library(dplyr)
+library(ggplot2)
+library(flexdashboard)
+```
+
+Inputs {.sidebar}
+-----------------------------------------------------------------------
+
+```{r}
+selectInput("varNameSel", label = h3("Economic varibale"), 
+  choices = as.character(dict.data$nameR), 
+  selected = as.character(dict.data$nameR[1]))
+### 2DO following start date and end date should be linked with the chosen variable
+dateRangeInput("datesSel", "Date range",
+      start = "1970-01-01", 
+      end = as.character(Sys.Date()))
+```
+HERE we explain the basic ideas, etc etc.
+
+
+Following to choose different delta
+```{r}
+selectInput("deltaSel", label = h3("Type of difference / delta"), 
+  choices = list("as-is"="asis", "log difference"="diffLog", "% return"="diffRelat", "absolute difference"="diffAbs"), 
+  selected = "diffLog")
+```
+as-is: $\Delta x_t = x_t$; 
+
+log diff: $\Delta x_t = \log(x_t)-\log(x_{t-1})$;
+
+% return: $\Delta x_t = x_t / x_{t_1} - 1$;
+
+abs diff: $\Delta x_t = x_t - x_{t_1}$;
+
+
+Following to choose order AR process
+```{r}
+selectInput("arLagSel", label = h3("Order of lag"), 
+  choices = list("as-is"="asis", "log difference"="diffLog", "% return"="diffRelat", "absolute difference"="diffAbs"), 
+  selected = "diffLog")
+```
+
+
+Row
+-----------------------------------------------------------------------
+### Select time window of variable
+
+```{r}
+#############################BEGIN: reactive data#############################################
+namVarb <- reactive({
+  as.character(input$varNameSel)
+})
+
+inp.date.beg <- reactive({
+  as.Date(input$datesSel[1])
+})
+
+inp.date.end <- reactive({
+  as.Date(input$datesSel[2])
+})
+
+df.eco2Use <- reactive({
+  Check.StopIf(sum(names(lst.eco)==namVarb())!=1, 
+               "The selected variable cannot be found in the data list. Check dict.data!!!")
+  eval(parse(text=paste0(
+   "tmp <- lst.eco$", namVarb()
+  )))
+  Check.ExistVarInDF(tmp, c("date", "value"))
+  filter(tmp, date >= max(inp.date.beg(), min(tmp$date))  &  date <= min(inp.date.end(), max(tmp$date)))
+})
+
+df.eco2Use.delta <- reactive({
+  tmp <- df.eco2Use()
+  Check.Unique(tmp$date)
+  Check.StopIf(sum(is.na(tmp$value))>0, "Currently, we cannot handle NA in the eco variable!")
+  if (!identical(sort(tmp$date), tmp$date)){
+    tmp <- tmp[match(sort(tmp$date), tmp$date), ]
+  }
+  if(input$deltaSel == "asis"){
+    res <- tmp
+  } else if (input$deltaSel == "diffLog"){
+    res <- tmp[-1, ]
+    res$value <- log(tmp[-1, 2]) - log(head(tmp[, 2], dim(tmp)[1]-1))
+  } else if (input$deltaSel == "diffRelat"){
+    res <- tmp[-1, ]
+    res$value <- tmp[-1, 2] / head(tmp[, 2], dim(tmp)[1]-1) -1
+  } else if (input$deltaSel == "diffAbs"){
+    res <- tmp[-1, ]
+    res$value <- tmp[-1, 2] - head(tmp[, 2], dim(tmp)[1]-1)
+  } else {
+    stop("The chosen delta is not defined. Extend code here!")
+  }
+  res
+})
+
+df.date.UsRecess <- reactive({
+  filter(dateUsRecess, monBeg >= min(df.eco2Use()[, 1]), monEnd <= max(df.eco2Use()[, 1]))
+})
+########################################################################END: reactive data##
+
+############### ANALYTIC #################
+#########################################
+
+#########PLOT
+renderPlot({
+    ggplot(df.eco2Use()) + 
+    geom_line(aes(x=date, y=value), col="blue", size=2) + theme_bw() + 
+    geom_rect(data=df.date.UsRecess(), 
+              aes(xmin=monBeg, xmax=monEnd, ymin=-Inf, ymax=+Inf), fill='red', alpha=0.2)
+})
+```
+
+
+
+Row {.tabset}
+-----------------------------------------------------------------------
+### Plot of $\Delta x_t$
+```{r}
+renderPlot({
+    ggplot(df.eco2Use.delta()) +
+    geom_line(aes(x=date, y=value), col="blue", size=1) + theme_bw() +
+    geom_rect(data=df.date.UsRecess(),
+              aes(xmin=monBeg, xmax=monEnd, ymin=-Inf, ymax=+Inf), fill='red', alpha=0.2)
+})
+```
+
+### ACF plot of $\Delta x_t$
+[ACF: correlation between values of the chosen variable at different time](https://en.wikipedia.org/wiki/Autocorrelation)
+
+```{r}
+### get ACF plot
+renderPlot({
+  acf.res <- acf(df.eco2Use.delta()[, 2], plot = F)
+  plot(acf.res, main = "")
+})
+```
+
+### PACF plot
+[PACF: partial correlation between values of the chosen variable at different time](https://en.wikipedia.org/wiki/Partial_autocorrelation_function)
+
+```{r}
+### get ACF plot
+renderPlot({
+  pacf.res <- pacf(df.eco2Use.delta()[, 2], plot = F)
+  plot(pacf.res, main = "")
+})
+```
