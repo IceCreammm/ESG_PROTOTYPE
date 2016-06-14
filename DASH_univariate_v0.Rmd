@@ -3,7 +3,8 @@ title: "ESG Mock"
 output: 
   flexdashboard::flex_dashboard:
     orientation: rows
-    # vertical_layout: fill
+    #vertical_layout: fill
+    #vertical_layout: scroll
 runtime: shiny
 ---
 
@@ -51,8 +52,8 @@ abs diff: $\Delta x_t = x_t - x_{t_1}$;
 Following to choose order AR process
 ```{r}
 selectInput("arLagSel", label = h3("Order of lag"), 
-  choices = list("as-is"="asis", "log difference"="diffLog", "% return"="diffRelat", "absolute difference"="diffAbs"), 
-  selected = "diffLog")
+  choices = list("TBC"="TBC"), 
+  selected = "TBC")
 ```
 
 
@@ -127,9 +128,9 @@ renderPlot({
 
 
 
-Row {.tabset}
+Row {.tabset .tabset-fade}
 -----------------------------------------------------------------------
-### Plot of $\Delta x_t$
+### Plot of delta
 ```{r}
 renderPlot({
     ggplot(df.eco2Use.delta()) +
@@ -139,7 +140,7 @@ renderPlot({
 })
 ```
 
-### ACF plot of $\Delta x_t$
+### ACF of delta
 [ACF: correlation between values of the chosen variable at different time](https://en.wikipedia.org/wiki/Autocorrelation)
 
 ```{r}
@@ -150,7 +151,7 @@ renderPlot({
 })
 ```
 
-### PACF plot
+### PACF of delta
 [PACF: partial correlation between values of the chosen variable at different time](https://en.wikipedia.org/wiki/Partial_autocorrelation_function)
 
 ```{r}
